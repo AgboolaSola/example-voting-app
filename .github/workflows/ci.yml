@@ -1,0 +1,50 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test the full app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+
+      - name: Start the app with Docker Compose
+        run: docker compose up -d --build --wait
+
+      - name: Check the vote page loads
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080)
+          echo "Vote page returned $code"
+          test "$code" = "200"
+
+      - name: Check the result page loads
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081)
+          echo "Result page returned $code"
+          test "$code" = "200"
+
+      - name: Cast a vote and check it reaches the database
+        run: |
+          curl -s -X POST --data "vote=a" http://localhost:8080 > /dev/null
+          for i in $(seq 1 15); do
+            count=$(docker compose exec -T db psql -U postgres -tAc "SELECT COUNT(*) FROM votes" 2>/dev/null || echo 0)
+            echo "Votes in database: $count"
+            if [ "$count" -ge 1 ]; then exit 0; fi
+            sleep 2
+          done
+          echo "The vote never reached the database"
+          exit 1
+
+      - name: Show the logs if anything failed
+        if: failure()
+        run: docker compose logs
+
+      - name: Clean up
+        if: always()
+        run: docker compose down -v
