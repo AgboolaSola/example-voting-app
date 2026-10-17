@@ -48,3 +48,39 @@ jobs:
       - name: Clean up
         if: always()
         run: docker compose down -v
+
+  build:
+    name: Build, scan and push ${{ matrix.service }}
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [vote, result, worker]
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+
+      - name: Set the image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.service }}:${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Build the image
+        run: docker build -t "$IMAGE" ./${{ matrix.service }}
+
+      - name: Scan the image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push the image
+        if: github.event_name == 'push'
+        run: docker push "$IMAGE"
