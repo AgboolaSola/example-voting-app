@@ -1,1 +1,7 @@
 node_modules/
+Dockerfile
+.dockerignore
+docker-compose.test.yml
+tests/
+.env
+.git
