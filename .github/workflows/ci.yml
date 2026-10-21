@@ -84,3 +84,35 @@ jobs:
       - name: Push the image
         if: github.event_name == 'push'
         run: docker push "$IMAGE"
+  deploy:
+    name: Deploy to EKS with Helm
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+
+      - name: Log in to AWS with OIDC (no stored keys)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-north-1
+
+      - name: Point kubectl at the cluster
+        run: aws eks update-kubeconfig --region eu-north-1 --name voting-app
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install voting-app helm/voting-app \
+            --set image.tag=${{ github.sha }} \
+            --wait --timeout 5m
+
+      - name: Show what is running
+        if: always()
+        run: |
+          helm history voting-app || true
+          kubectl get pods
