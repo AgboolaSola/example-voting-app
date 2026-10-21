@@ -1,0 +1,23 @@
+# Images built and pushed by the GitHub Actions pipeline.
+# The tag is the commit SHA, so you always know which code is running.
+image:
+  registry: ghcr.io/agboolasola
+  tag: "cbf738ca288d8e9e00c6d1e4b1fe69b1781be0f4"
+
+vote:
+  replicas: 1
+  nodePort: 31000   # http://localhost:31000
+
+result:
+  replicas: 1
+  nodePort: 31001   # http://localhost:31001
+
+worker:
+  replicas: 1
+
+# Data stores use the same public images as docker-compose.yml
+redis:
+  image: redis:alpine
+
+db:
+  image: postgres:15-alpine
