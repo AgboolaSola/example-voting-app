@@ -4,3 +4,9 @@ bin/
 obj/
 .vs/
 node_modules/
+
+# Terraform: never commit state (it can contain secrets) or downloaded providers
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
