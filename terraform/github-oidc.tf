@@ -1,7 +1,7 @@
 variable "github_repo" {
   description = "The only GitHub repo allowed to deploy"
   type        = string
-  default     = "AgboolaSola/example-voting-app"
+  default     = "AgboolaSola@283355297/example-voting-app@1422570973"
 }
 
 # Lets AWS trust login tokens issued by GitHub Actions
