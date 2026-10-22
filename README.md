@@ -1,65 +1,117 @@
-# Example Voting App
+# Capstone 1: Ship It (Example Voting App)
 
-A simple distributed application running across multiple Docker containers.
+This is my Capstone 1 project. I took Docker's example voting app and built the full pipeline around it. One push to `main` tests the app, scans it, builds the images and deploys it to Kubernetes on AWS.
 
-## Getting started
+Original app: [dockersamples/example-voting-app](https://github.com/dockersamples/example-voting-app)
 
-Download [Docker Desktop](https://www.docker.com/products/docker-desktop) for Mac or Windows. [Docker Compose](https://docs.docker.com/compose) will be automatically installed. On Linux, make sure you have the latest version of [Compose](https://docs.docker.com/compose/install/).
+## The app
 
-This solution uses Python, Node.js, .NET, with Redis for messaging and Postgres for storage.
-
-Run in this directory to build and run the app:
-
-```shell
-docker compose up
-```
-
-The `vote` app will be running at [http://localhost:8080](http://localhost:8080), and the `results` will be at [http://localhost:8081](http://localhost:8081).
-
-Alternately, if you want to run it on a [Docker Swarm](https://docs.docker.com/engine/swarm/), first make sure you have a swarm. If you don't, run:
-
-```shell
-docker swarm init
-```
-
-Once you have your swarm, in this directory run:
-
-```shell
-docker stack deploy --compose-file docker-stack.yml vote
-```
-
-## Run the app in Kubernetes
-
-The folder k8s-specifications contains the YAML specifications of the Voting App's services.
-
-Run the following command to create the deployments and services. Note it will create these resources in your current namespace (`default` if you haven't changed it.)
-
-```shell
-kubectl create -f k8s-specifications/
-```
-
-The `vote` web app is then available on port 31000 on each host of the cluster, the `result` web app is available on port 31001.
-
-To remove them, run:
-
-```shell
-kubectl delete -f k8s-specifications/
-```
+| Service | Language | What it does |
+|---|---|---|
+| vote | Python | Web page where you vote cats or dogs |
+| redis | Redis | Holds new votes in a queue |
+| worker | .NET | Moves votes from Redis into the database |
+| db | Postgres | Stores the votes |
+| result | Node.js | Web page that shows the results live |
 
 ## Architecture
 
-![Architecture diagram](architecture.excalidraw.png)
+```mermaid
+flowchart LR
+  push[Push to main] --> test[Test with docker compose]
+  test --> build[Build + Trivy scan]
+  build --> ghcr[(GHCR images tagged with commit SHA)]
+  ghcr --> deploy[Helm deploy via OIDC]
+  subgraph aws [AWS eu-north-1, default VPC]
+    subgraph eks [EKS cluster built by Terraform]
+      vote --> redis --> worker --> db
+      result --> db
+    end
+  end
+  deploy --> eks
+```
 
-* A front-end web app in [Python](/vote) which lets you vote between two options
-* A [Redis](https://hub.docker.com/_/redis/) which collects new votes
-* A [.NET](/worker/) worker which consumes votes and stores them in…
-* A [Postgres](https://hub.docker.com/_/postgres/) database backed by a Docker volume
-* A [Node.js](/result) web app which shows the results of the voting in real time
+## What's in this repo
 
-## Notes
+```
+vote/ result/ worker/      app code and hardened Dockerfiles
+docker-compose.yml         run everything on my laptop
+.github/workflows/ci.yml   the pipeline
+terraform/                 EKS cluster in the default VPC + GitHub OIDC role
+helm/voting-app/           one chart, one values file
+kind-config.yaml           local Kubernetes cluster for testing the chart
+```
 
-The voting application only accepts one vote per client browser. It does not register additional votes if a vote has already been submitted from a client.
+## Run it locally
 
-This isn't an example of a properly architected perfectly designed distributed app... it's just a simple
-example of the various types of pieces and languages you might see (queues, persistent data, etc), and how to
-deal with them in Docker at a basic level.
+```bash
+docker compose up -d --build
+```
+
+Vote at http://localhost:8080 and see results at http://localhost:8081.
+
+## Containers
+
+- Base images pinned by digest, not just a tag
+- Every container runs as a non-root user
+- `.dockerignore` in each service
+- Upgraded Node 18 to 24 and .NET 7 to 10 (both were end of life)
+
+## Pipeline
+
+On every push to `main`:
+
+1. **Test**: start the whole app with Docker Compose, check both pages load, cast a vote and check it reaches the database
+2. **Build and scan**: build the 3 images and scan them with Trivy. The job fails on any CRITICAL vulnerability that has a fix
+3. **Push**: push the images to GHCR, tagged with the commit SHA
+4. **Deploy**: log in to AWS with OIDC and run `helm upgrade --install` with the new tag
+
+Third-party actions are pinned by commit SHA.
+
+## Infrastructure (Terraform)
+
+```bash
+cd terraform
+terraform init
+terraform apply
+aws eks update-kubeconfig --region eu-north-1 --name voting-app
+kubectl create secret generic db-credentials --from-literal=password=postgres
+```
+
+To tear it all down: `terraform destroy`. The nodes use `m7i-flex.large` because it's allowed on the AWS Free plan.
+
+## Deploy and roll back with Helm
+
+```bash
+helm upgrade --install voting-app helm/voting-app --set image.tag=<commit-sha>
+```
+
+Bad release on purpose, then roll back:
+
+```bash
+helm upgrade voting-app helm/voting-app --set image.tag=broken-tag --wait --timeout 90s
+helm history voting-app
+helm rollback voting-app <last-good-revision>
+```
+
+While the bad release is failing, the old pods keep running, so the app stays up.
+
+## Secrets
+
+- The database password is a Kubernetes Secret, created by hand. It's not in the chart.
+- The pipeline logs in to AWS with OIDC, so no AWS keys are stored in GitHub.
+- Terraform state is in `.gitignore`.
+- Known limitation: the original app has the password written in `result/server.js` and `worker/Program.cs`. Fixing that means changing the app to read it from an environment variable.
+
+## Problems I hit
+
+- Trivy blocked 3 images: `System.Drawing.Common` in the worker, `proxy-addr` in result, and `perl-base` in the result base image. I fixed each one.
+- The OIDC login failed because GitHub now puts the account and repo ID numbers in the token. I found the real value in CloudTrail and updated the trust policy.
+- AWS phone verification blocked my account for days. AWS Support verified it by phone.
+
+## What I would improve next
+
+- Use a persistent volume for Postgres instead of `emptyDir`
+- Store Terraform state in S3 so it isn't only on my laptop
+- Add an Ingress so the app is reachable without port-forward
+- Give the Terraform user only the permissions it needs
